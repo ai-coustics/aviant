@@ -10,7 +10,7 @@ Aviant is a self-hosted speech enhancement server by [ai-coustics](https://ai-co
 docker run --gpus all -p 8080:8080 \
   -v /usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro \
   -e SDK_KEY="YOUR-KEY" \
-  ghcr.io/ai-coustics/aviant-wgpu:latest --batch-size 1
+  ghcr.io/ai-coustics/aviant-wgpu:latest --batch-size 1 --model lark-v2
 ```
 
 **2. Check it's running:**
