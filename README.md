@@ -37,9 +37,11 @@ curl -X POST http://localhost:8080/v1/enhance \
 
 `--batch-size` controls how many frames are processed in parallel on the GPU. Each frame corresponds to ~20 s of audio. Processing time scales linearly with batch size.
 
-| Batch size | VRAM usage | Time per frame (RTX 3090) |
-|---|---|---|
-| 1 | < 4 GB | ~4.7 s |
+Model | Frame length | VRAM usage | Time per frame (RTX 3090) |
+|---|---|---|---|
+Lark v2 | 20s | < 4 GB | ~4.7 s |
+Lark v1 | 20s | < 3 GB | ~2.3 s |
+Finch v1 | 20s | < 3 GB | ~2.3 s |
 
 > **Note:** The first request after startup is slow (up to ~80 s on an RTX 3090) due to Vulkan shader optimization. All subsequent requests run at full speed.
 
@@ -115,7 +117,7 @@ When both are provided, the header takes precedence. Create SDK keys in the [ai-
 | `--port` | Port the server listens on | `8080` |
 | `--model` | Model: `lark-v2`, `lark-v1`, `finch` | `lark-v2` |
 | `--batch-size` | Frames processed in parallel on the GPU | unlimited |
-| `--weights` | Path to a custom `.aviant` weight file | auto per model |
+| `--weights` | Path to a custom `.aviant` weight file | auto per model setting |
 
 ## Input and output
 
@@ -133,4 +135,3 @@ When both are provided, the header takes precedence. Create SDK keys in the [ai-
 
 - [Developer portal](https://developers.ai-coustics.com)
 - [Discord](https://discord.gg/wrSthtNqQ4)
-- [Contact](https://ai-coustics.com/contact/)
