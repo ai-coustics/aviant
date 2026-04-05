@@ -74,6 +74,31 @@ curl -X POST http://localhost:8080/v1/enhance \
   -o enhanced.wav
 ```
 
+### `POST /v1/normalize`
+
+Normalize an audio file without enhancement. Applies EBU R128 loudness normalization (-17 LUFS) and resamples to 32 kHz mono. Returns `audio/wav`. This is the same preprocessing that runs internally before enhancement, useful when you need the normalized audio separately.
+
+Does not use the GPU or run model inference, so responses are fast (roughly 2-4 seconds per minute of audio).
+
+**File upload** (multipart/form-data):
+
+```bash
+curl -X POST http://localhost:8080/v1/normalize \
+  -H "Authorization: Bearer $SDK_KEY" \
+  -F audio=@input.wav \
+  -o normalized.wav
+```
+
+**URL mode** (application/json):
+
+```bash
+curl -X POST http://localhost:8080/v1/normalize \
+  -H "Authorization: Bearer $SDK_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/audio.wav"}' \
+  -o normalized.wav
+```
+
 ### `POST /v1/enhance/async`
 
 Async enhancement via cloud storage. The server downloads from `input_url`, processes the audio, and uploads the result to `output_url`. A preprocessed (normalized, 32 kHz) copy of the input is also uploaded alongside the output as `{input_filename}_preprocessed.wav`.
