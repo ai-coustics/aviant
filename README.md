@@ -43,7 +43,7 @@ Lark v2 | 20s | < 4 GB | ~4.7 s |
 Lark v1 | 20s | < 3 GB | ~2.3 s |
 Finch v1 | 20s | < 3 GB | ~2.3 s |
 
-> **Note:** The first request after startup is slow (up to ~80 s on an RTX 3090) due to Vulkan shader optimization. All subsequent requests run at full speed.
+> **Note:** The first request after startup is slow (up to ~80 s on an RTX 3090) due to Vulkan shader compilation. Use `--warmup` or build a pre-warmed image to eliminate this. See [Reducing cold start](#reducing-cold-start) below.
 
 ## API reference
 
@@ -143,6 +143,55 @@ When both are provided, the header takes precedence. Create SDK keys in the [ai-
 | `--model` | Model: `lark-v2`, `lark-v1`, `finch` | `lark-v2` |
 | `--batch-size` | Frames processed in parallel on the GPU | unlimited |
 | `--weights` | Path to a custom `.aviant` weight file | auto per model setting |
+| `--warmup` | Run a dummy inference at startup to compile GPU shaders before serving | off |
+| `--no-warmup` | Disable startup warmup (the default) | — |
+| `--warmup-only` | Run warmup then exit. Used for building pre-warmed images | — |
+
+## Reducing cold start
+
+The first inference after startup takes 45-80 s because the GPU shaders are compiled on demand. There are two ways to handle this:
+
+### Option 1: Startup warmup
+
+Add `--warmup` to run a dummy inference during server startup. This compiles all GPU shaders before the server accepts traffic. The container takes longer to start, but user requests are always fast.
+
+```bash
+docker run --gpus all -p 8080:8080 \
+  -v /usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro \
+  -e SDK_KEY="YOUR-KEY" \
+  ghcr.io/ai-coustics/aviant-wgpu:latest --batch-size 1 --model lark-v2 --warmup
+```
+
+### Option 2: Pre-warmed Docker image
+
+Build a new image that bakes in the compiled shader cache. This eliminates the cold start on subsequent container boots, which is useful for scale-to-zero deployments where containers restart frequently.
+
+**Important:** Shaders are specialized per batch size. The warmup must use the same `--batch-size` as production inference.
+
+```bash
+# 1. Run warmup on a GPU host (compiles shaders, writes driver caches to disk)
+docker run --gpus all \
+  -v /usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro \
+  --name aviant-warmup \
+  ghcr.io/ai-coustics/aviant-wgpu:latest \
+  --model lark-v2 --batch-size 1 --warmup-only
+
+# 2. Commit the stopped container as a new image
+docker commit aviant-warmup aviant-wgpu-warmed
+docker rm aviant-warmup
+
+# 3. Use the warmed image in production
+docker run --gpus all -p 8080:8080 \
+  -v /usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro \
+  -e SDK_KEY="YOUR-KEY" \
+  aviant-wgpu-warmed --batch-size 1 --model lark-v2
+```
+
+A convenience script is available in the [SDK repository](https://github.com/ai-coustics/aviant-sdk/blob/main/scripts/warmup-image.sh):
+
+```bash
+./scripts/warmup-image.sh --base ghcr.io/ai-coustics/aviant-wgpu:latest --model lark-v2 --batch-size 1
+```
 
 ## Input and output
 
