@@ -187,7 +187,7 @@ docker run --gpus all -p 8080:8080 \
   aviant-wgpu-warmed --batch-size 1 --model lark-v2
 ```
 
-A convenience script is available in the [SDK repository](https://github.com/ai-coustics/aviant-sdk/blob/main/scripts/warmup-image.sh):
+A convenience script is provided at [`scripts/warmup-image.sh`](scripts/warmup-image.sh):
 
 ```bash
 ./scripts/warmup-image.sh --base ghcr.io/ai-coustics/aviant-wgpu:latest --model lark-v2 --batch-size 1
