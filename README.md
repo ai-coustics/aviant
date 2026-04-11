@@ -28,10 +28,26 @@ curl -X POST http://localhost:8080/v1/enhance \
   -o enhanced.wav
 ```
 
+## CUDA backend (no Vulkan required)
+
+For environments without Vulkan drivers (e.g. Azure NC/ND-series VMs), use the CUDA image instead:
+
+```bash
+docker run --gpus all -p 8080:8080 \
+  -e SDK_KEY="YOUR-KEY" \
+  ghcr.io/ai-coustics/aviant-cuda:latest --batch-size 1 --model lark-v2
+```
+
+No Vulkan ICD mount needed. Requires NVIDIA driver >= 560.28.
+
 ## Host requirements
 
-- [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) installed
-- Vulkan ICD files available on the host (comes with NVIDIA drivers) — mapped into the container via `-v /usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro`
+| | WGPU image (`aviant-wgpu`) | CUDA image (`aviant-cuda`) |
+|---|---|---|
+| NVIDIA Container Toolkit | required | required |
+| Vulkan ICD files | required (mapped via `-v`) | not needed |
+| Min NVIDIA driver | any recent | >= 560.28 |
+| Platforms | linux/amd64, linux/arm64 (CPU) | linux/amd64 only |
 
 ## Performance
 
@@ -140,6 +156,7 @@ When both are provided, the header takes precedence. Create SDK keys in the [ai-
 | Flag | Description | Default |
 |---|---|---|
 | `--port` | Port the server listens on | `8080` |
+| `--backend` | Compute backend: `wgpu`, `cuda`, `cpu` | `wgpu` |
 | `--model` | Model: `lark-v2`, `lark-v1`, `finch` | `lark-v2` |
 | `--batch-size` | Frames processed in parallel on the GPU | unlimited |
 | `--weights` | Path to a custom `.aviant` weight file | auto per model setting |
@@ -149,7 +166,7 @@ When both are provided, the header takes precedence. Create SDK keys in the [ai-
 
 ## Reducing cold start
 
-The first inference after startup takes 45-80 s because the GPU shaders are compiled on demand. There are two ways to handle this:
+The first inference after startup is slow because GPU kernels are compiled on demand (45-80 s for WGPU/Vulkan, longer for CUDA/NVRTC). There are two ways to handle this:
 
 ### Option 1: Startup warmup
 
@@ -187,10 +204,14 @@ docker run --gpus all -p 8080:8080 \
   aviant-wgpu-warmed --batch-size 1 --model lark-v2
 ```
 
-A convenience script is provided at [`scripts/warmup-image.sh`](scripts/warmup-image.sh):
+Convenience scripts are provided for both backends:
 
 ```bash
+# WGPU (Vulkan)
 ./scripts/warmup-image.sh --base ghcr.io/ai-coustics/aviant-wgpu:latest --model lark-v2 --batch-size 1
+
+# CUDA
+./scripts/warmup-cuda.sh --base ghcr.io/ai-coustics/aviant-cuda:latest --model lark-v2 --batch-size 1
 ```
 
 ## Input and output
@@ -198,6 +219,30 @@ A convenience script is provided at [`scripts/warmup-image.sh`](scripts/warmup-i
 - **Input**: most audio formats and sample rates (ffmpeg-based decoding)
 - **Output**: mono WAV, 16-bit PCM, 32 kHz
 - **Concurrency**: the server accepts concurrent requests and queues them in front of the inference engine
+
+## Azure deployment
+
+Azure NC/ND-series VMs have NVIDIA GPUs with CUDA but typically no Vulkan drivers. Use the CUDA image:
+
+1. Create an NC-series VM (e.g. NC4as_T4_v3) or AKS GPU node pool
+2. Install [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
+3. Verify GPU access: `nvidia-smi` should show driver >= 560.28
+4. Run the CUDA image:
+
+```bash
+docker run --gpus all -p 8080:8080 \
+  -e SDK_KEY="YOUR-KEY" \
+  ghcr.io/ai-coustics/aviant-cuda:latest --warmup --batch-size 1 --model lark-v2
+```
+
+### Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `CUDA driver initialization failed` | Driver too old or missing | Update to NVIDIA driver >= 560.28 |
+| `No CUDA devices found` | Container can't see GPU | Add `--gpus all` to `docker run` |
+| `NVRTC compilation error` | Missing CUDA headers | Use the official `aviant-cuda` image (headers are baked in) |
+| Slow first request | Kernel compilation (expected) | Use `--warmup` flag or pre-warm with `warmup-cuda.sh` |
 
 ## Limitations
 

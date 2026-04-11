@@ -2,6 +2,14 @@
 
 All notable changes to the Aviant Speech Enhancement Server are documented here.
 
+## [0.4.5] - 2026-04-11
+
+### Added
+- CUDA backend support (`--backend cuda`) for environments without Vulkan (e.g. Azure NC/ND-series VMs)
+- CUDA Docker image (`ghcr.io/ai-coustics/aviant-cuda`) with automatic driver validation and GPU diagnostics
+- CUDA warmup script (`scripts/warmup-cuda.sh`) for pre-warming CUDA Docker images
+- Azure deployment documentation with troubleshooting guide
+
 ## [0.4.4] - 2026-04-06
 
 ### Added
