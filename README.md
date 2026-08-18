@@ -37,7 +37,7 @@ curl -X POST http://localhost:8080/v1/enhance \
 For environments without Vulkan drivers (e.g. Azure NC/ND-series VMs), use the CUDA image instead:
 
 ```bash
-docker run --gpus all -p 8080:8080 \
+docker run --gpus all -p 8080:8080 --restart unless-stopped \
   -e SDK_KEY="YOUR-KEY" \
   ghcr.io/ai-coustics/aviant-cuda:latest --batch-size 1 --model lark-v2
 ```
@@ -91,12 +91,24 @@ Finch v1 | 20s | < 3 GB | ~2.3 s |
 
 Checks the environment and reports *every* problem in one run, then exits non-zero if the machine could not serve. Run it on a host before deploying, or when opening a support ticket.
 
+Give it the **same** GPU access, ICD mount and key as the server, or it will report failures caused by the way you invoked the diagnostic rather than by the host:
+
 ```bash
-docker run --rm ghcr.io/ai-coustics/aviant-wgpu:latest doctor
-docker run --rm ghcr.io/ai-coustics/aviant-wgpu:latest doctor --json
+# WGPU image
+docker run --rm --gpus all \
+  -v /usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro \
+  -e SDK_KEY="YOUR-KEY" \
+  ghcr.io/ai-coustics/aviant-wgpu:latest doctor
+
+# CUDA image (no ICD mount), machine-readable for a support ticket
+docker run --rm --gpus all \
+  -e SDK_KEY="YOUR-KEY" \
+  ghcr.io/ai-coustics/aviant-cuda:latest doctor --json
 ```
 
 It verifies ffmpeg and its required filters, the weight file, the licence key (offline, without printing it), temp-directory writability, the GPU adapters, and that a real tensor operation on the selected device returns the right answer.
+
+Because it runs a real tensor operation, dropping `--gpus all` or the ICD mount makes the GPU checks fail on a perfectly healthy host. Omitting `SDK_KEY` is only a warning — the licence check is skipped, every other check still runs.
 
 ### `POST /v1/enhance`
 
@@ -254,7 +266,7 @@ The first inference after startup is slow because GPU kernels are compiled on de
 Add `--warmup` to run a dummy inference during server startup. This compiles all GPU shaders before the server accepts traffic. The container takes longer to start, but user requests are always fast.
 
 ```bash
-docker run --gpus all -p 8080:8080 \
+docker run --gpus all -p 8080:8080 --restart unless-stopped \
   -v /usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro \
   -e SDK_KEY="YOUR-KEY" \
   ghcr.io/ai-coustics/aviant-wgpu:latest --batch-size 1 --model lark-v2 --warmup
@@ -273,13 +285,15 @@ docker run --gpus all \
   --name aviant-warmup \
   ghcr.io/ai-coustics/aviant-wgpu:latest \
   --model lark-v2 --batch-size 1 --warmup-only
+# No --restart here: --warmup-only is meant to exit, and a restart policy
+# would relaunch it forever. Restart policies belong on serving containers.
 
 # 2. Commit the stopped container as a new image
 docker commit aviant-warmup aviant-wgpu-warmed
 docker rm aviant-warmup
 
 # 3. Use the warmed image in production
-docker run --gpus all -p 8080:8080 \
+docker run --gpus all -p 8080:8080 --restart unless-stopped \
   -v /usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro \
   -e SDK_KEY="YOUR-KEY" \
   aviant-wgpu-warmed --batch-size 1 --model lark-v2
@@ -311,7 +325,7 @@ Azure NC/ND-series VMs have NVIDIA GPUs with CUDA but typically no Vulkan driver
 4. Run the CUDA image:
 
 ```bash
-docker run --gpus all -p 8080:8080 \
+docker run --gpus all -p 8080:8080 --restart unless-stopped \
   -e SDK_KEY="YOUR-KEY" \
   ghcr.io/ai-coustics/aviant-cuda:latest --warmup --batch-size 1 --model lark-v2
 ```
