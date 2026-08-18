@@ -2,22 +2,26 @@
 
 Aviant is a self-hosted speech enhancement server by [ai-coustics](https://ai-coustics.com). It takes noisy audio and produces clean, enhanced speech — running entirely on your infrastructure.
 
+> **On a Mac, do not use Docker.** No container runtime on macOS can reach the Apple GPU, so the image below resolves to an arm64 CPU build that runs roughly **14x slower** — slower than realtime. See [Running on macOS](#running-on-macos).
+
 ## Quick start
 
 **1. Run the server** (requires an NVIDIA GPU):
 
 ```bash
-docker run --gpus all -p 8080:8080 \
+docker run --gpus all -p 8080:8080 --restart unless-stopped \
   -v /usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro \
   -e SDK_KEY="YOUR-KEY" \
   ghcr.io/ai-coustics/aviant-wgpu:latest --batch-size 1 --model lark-v2
 ```
 
+`--restart unless-stopped` matters: if the compute device is lost, the server reports `503` and exits so a supervisor can replace it. Without a restart policy it stays down.
+
 **2. Check it's running:**
 
 ```bash
 curl http://localhost:8080/health
-# {"status":"ok"}
+# {"status":"ok", ...}
 ```
 
 **3. Enhance an audio file:**
@@ -33,7 +37,7 @@ curl -X POST http://localhost:8080/v1/enhance \
 For environments without Vulkan drivers (e.g. Azure NC/ND-series VMs), use the CUDA image instead:
 
 ```bash
-docker run --gpus all -p 8080:8080 \
+docker run --gpus all -p 8080:8080 --restart unless-stopped \
   -e SDK_KEY="YOUR-KEY" \
   ghcr.io/ai-coustics/aviant-cuda:latest --batch-size 1 --model lark-v2
 ```
@@ -59,13 +63,52 @@ Lark v2 | 20s | < 4 GB | ~4.7 s |
 Lark v1 | 20s | < 3 GB | ~2.3 s |
 Finch v1 | 20s | < 3 GB | ~2.3 s |
 
-> **Note:** The first request after startup is slow (up to ~80 s on an RTX 3090) due to Vulkan shader compilation. Use `--warmup` or build a pre-warmed image to eliminate this. See [Reducing cold start](#reducing-cold-start) below.
+> **Note:** The first request after startup is slow (~80 s on an RTX 3090) due to Vulkan shader compilation. Use `--warmup` or build a pre-warmed image to eliminate this. See [Reducing cold start](#reducing-cold-start) below.
 
 ## API reference
 
 ### `GET /health`
 
-Returns `{"status":"ok"}` when the server is ready.
+`200` with `"status":"ok"` when the server can serve; `503` with `"status":"unavailable"` and a `reason` when it cannot. Use it as both a liveness and a readiness probe — a `503` means restart, not retry.
+
+```json
+{
+  "status": "ok",
+  "version": "0.5.1",
+  "model": "lark-v2",
+  "backend": {
+    "selected": "wgpu",
+    "status": {"cpu": "compiled", "wgpu": "selected", "cuda": "not-compiled"}
+  },
+  "ffmpeg": {"ffmpeg": true, "ffprobe": true, "loudnorm": true, "deesser": true, "libmp3lame": true},
+  "queue": {"depth": 0, "capacity": 16}
+}
+```
+
+`not-compiled` means this image was built without that backend, which is different from a backend that is present but has no usable device.
+
+### `aviant doctor`
+
+Checks the environment and reports *every* problem in one run, then exits non-zero if the machine could not serve. Run it on a host before deploying, or when opening a support ticket.
+
+Give it the **same** GPU access, ICD mount and key as the server, or it will report failures caused by the way you invoked the diagnostic rather than by the host:
+
+```bash
+# WGPU image
+docker run --rm --gpus all \
+  -v /usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro \
+  -e SDK_KEY="YOUR-KEY" \
+  ghcr.io/ai-coustics/aviant-wgpu:latest doctor
+
+# CUDA image (no ICD mount), machine-readable for a support ticket
+docker run --rm --gpus all \
+  -e SDK_KEY="YOUR-KEY" \
+  ghcr.io/ai-coustics/aviant-cuda:latest doctor --json
+```
+
+It verifies ffmpeg and its required filters, the weight file, the licence key (offline, without printing it), temp-directory writability, the GPU adapters, and that a real tensor operation on the selected device returns the right answer.
+
+Because it runs a real tensor operation, dropping `--gpus all` or the ICD mount makes the GPU checks fail on a perfectly healthy host. Omitting `SDK_KEY` is only a warning — the licence check is skipped, every other check still runs.
 
 ### `POST /v1/enhance`
 
@@ -134,11 +177,14 @@ curl -X POST http://localhost:8080/v1/enhance/async \
 
 ### Error codes
 
-| Status | Meaning |
-|---|---|
-| `400` | Bad request — invalid audio format or missing parameters |
-| `401` | Unauthorized — missing or invalid SDK key |
-| `500` | Internal server error — processing failed |
+| Status | Meaning | Retry? |
+|---|---|---|
+| `400` | Bad request — an unsupported upload file extension, or audio that cannot be decoded | No, it will fail identically |
+| `401` | Unauthorized — missing, malformed or invalid SDK key | No |
+| `500` | Internal server error — processing failed | Maybe |
+| `503` | The server cannot serve at all — the compute device was lost, or a required ffmpeg capability is missing | After the restart |
+
+On `503` the process exits so your supervisor restarts it.
 
 ## Authentication
 
@@ -151,29 +197,76 @@ Pass your SDK key in one of two ways:
 
 When both are provided, the header takes precedence. Create SDK keys in the [ai-coustics developer portal](https://developers.ai-coustics.com).
 
+> **`SDK_KEY` serves unauthenticated requests.** With `SDK_KEY` set, a request that carries *no* `Authorization` header is served using it — so anything that can reach the port can spend your licence. For any deployment reachable beyond loopback, set `--allow-env-key false` and have clients send their own header. This default will change in a future major version.
+
+A malformed header (`Basic ...`, a bare token, or `Bearer` with no key) is rejected with `401` rather than falling back to `SDK_KEY`.
+
 ## Server options
+
+Run `--help` for the authoritative list.
 
 | Flag | Description | Default |
 |---|---|---|
+| `--host` | Address to bind | `127.0.0.1` |
 | `--port` | Port the server listens on | `8080` |
 | `--backend` | Compute backend: `wgpu`, `cuda`, `cpu` | `wgpu` |
 | `--model` | Model: `lark-v2`, `lark-v1`, `finch` | `lark-v2` |
 | `--batch-size` | Frames processed in parallel on the GPU | unlimited |
 | `--weights` | Path to a custom `.aviant` weight file | auto per model setting |
+| `--allow-env-key` | Serve requests with no `Authorization` header using the server's own `SDK_KEY` | `true` |
+| `--allow-cpu-fallback` | Fall back to the CPU backend if the GPU cannot compute, instead of refusing to start | off |
 | `--warmup` | Run a dummy inference at startup to compile GPU shaders before serving | off |
 | `--no-warmup` | Disable startup warmup (the default) | — |
 | `--warmup-only` | Run warmup then exit. Used for building pre-warmed images | — |
 
+**`--host` defaults to loopback.** A server started by hand serves only the machine it runs on. The published Docker images pass `--host 0.0.0.0` in their entrypoint — a container binding loopback would be unreachable through `-p` — so containers are unaffected.
+
+### Startup checks
+
+The server verifies before it accepts traffic, and refuses to start rather than failing every request later:
+
+- **ffmpeg**: `ffmpeg`, `ffprobe`, `loudnorm`, `deesser` and the `pcm_s16le` encoder must be present. Every missing capability is named at once. `libmp3lame` is optional
+- **The compute device**: a real tensor operation must return the right answer on the selected backend. Pass `--allow-cpu-fallback` to fall back to the CPU (roughly 14x slower) instead
+
+## Running on macOS
+
+macOS runs the server **natively**, not in a container. Docker Desktop, Podman, Colima, OrbStack and Apple's `container` tool all run Linux in a VM, and Apple exposes no GPU compute API to VMs — so a container on a Mac cannot reach Metal at any layer, and falls back to a CPU build measured at roughly 14x slower.
+
+> **Development target. Not supported for production deployment.** Apple GPU compute cannot be tested in CI, so we do not promise support for something we cannot verify on every change.
+
+Measured on an M4 Max, lark-v2, `--batch-size 1`, 30.6 s of audio:
+
+| Backend | End-to-end wall | vs realtime |
+|---|---|---|
+| wgpu (Metal) | **21.2 s** | 0.69x — faster than realtime |
+| cpu (NdArray) | 288.8 s | 9.4x — far slower than realtime |
+
+Native macOS packaging (`brew install`) is not released yet. If you need to run Aviant on a Mac today, [get in touch](#support) — do not use the Docker image as a substitute.
+
+### Reaching a native server from your containers
+
+The server binds `127.0.0.1` by default. Docker Desktop and OrbStack both proxy host loopback, so a client container reaches it without widening the bind:
+
+```yaml
+services:
+  your-client:
+    environment:
+      # Docker Desktop; use host.orb.internal on OrbStack
+      AVIANT_URL: http://host.docker.internal:8080
+```
+
+Do **not** pass `--host 0.0.0.0` for this. It is not needed on either runtime, and combined with the default `--allow-env-key` it lets anything on your network spend your licence.
+
 ## Reducing cold start
 
-The first inference after startup is slow because GPU kernels are compiled on demand (45-80 s for WGPU/Vulkan, longer for CUDA/NVRTC). There are two ways to handle this:
+The first inference after startup is slow because GPU kernels are compiled on demand: ~80 s for WGPU/Vulkan on an RTX 3090, 75–120 s for WGPU/Metal on an M4 Max, and longer for CUDA/NVRTC. There are two ways to handle this:
 
 ### Option 1: Startup warmup
 
 Add `--warmup` to run a dummy inference during server startup. This compiles all GPU shaders before the server accepts traffic. The container takes longer to start, but user requests are always fast.
 
 ```bash
-docker run --gpus all -p 8080:8080 \
+docker run --gpus all -p 8080:8080 --restart unless-stopped \
   -v /usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro \
   -e SDK_KEY="YOUR-KEY" \
   ghcr.io/ai-coustics/aviant-wgpu:latest --batch-size 1 --model lark-v2 --warmup
@@ -192,13 +285,15 @@ docker run --gpus all \
   --name aviant-warmup \
   ghcr.io/ai-coustics/aviant-wgpu:latest \
   --model lark-v2 --batch-size 1 --warmup-only
+# No --restart here: --warmup-only is meant to exit, and a restart policy
+# would relaunch it forever. Restart policies belong on serving containers.
 
 # 2. Commit the stopped container as a new image
 docker commit aviant-warmup aviant-wgpu-warmed
 docker rm aviant-warmup
 
 # 3. Use the warmed image in production
-docker run --gpus all -p 8080:8080 \
+docker run --gpus all -p 8080:8080 --restart unless-stopped \
   -v /usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro \
   -e SDK_KEY="YOUR-KEY" \
   aviant-wgpu-warmed --batch-size 1 --model lark-v2
@@ -230,7 +325,7 @@ Azure NC/ND-series VMs have NVIDIA GPUs with CUDA but typically no Vulkan driver
 4. Run the CUDA image:
 
 ```bash
-docker run --gpus all -p 8080:8080 \
+docker run --gpus all -p 8080:8080 --restart unless-stopped \
   -e SDK_KEY="YOUR-KEY" \
   ghcr.io/ai-coustics/aviant-cuda:latest --warmup --batch-size 1 --model lark-v2
 ```
@@ -246,8 +341,9 @@ docker run --gpus all -p 8080:8080 \
 
 ## Limitations
 
-- Processing very long files (1 h @ 32 kHz mono, ~230 MB) may exhaust memory
+- Processing very long files (1 h @ 32 kHz mono, ~230 MB) may exhaust host memory. `--batch-size` does not control this: the pipeline computes the STFT for every frame before batching begins, so host memory scales with the *length of the input*. Split inputs longer than ~10 minutes
 - Processing many small files concurrently may exhaust disk I/O (file-based pipeline)
+- The inference queue holds 16 requests; beyond that, requests wait. Watch `queue.depth` in `/health`
 - The server authenticates and sends usage telemetry to the ai-coustics backend. Contact us to discuss air-gapped deployments
 
 ## Support
