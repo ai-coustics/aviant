@@ -74,7 +74,7 @@ Finch v1 | 20s | < 3 GB | ~2.3 s |
 ```json
 {
   "status": "ok",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "model": "lark-v2",
   "backend": {
     "selected": "wgpu",
@@ -282,7 +282,14 @@ Build a new image that bakes in the compiled shader cache. This eliminates the c
 
 **Important:** Shaders are specialized per batch size. The warmup must use the same `--batch-size` as production inference.
 
-The compiled cache lives in a fixed per-user directory (`/root/.cache/aviant` in the Docker images, `~/Library/Caches/aviant` on macOS, `~/.cache/aviant` on Linux). Set `AVIANT_CACHE_DIR` to override it; `aviant doctor` prints the path in use and whether it is warm. A warmed image keeps the server version it was built from, so re-run warmup against each new base image.
+The compiled cache lives in a fixed per-user directory, chosen in this order:
+
+1. `AVIANT_CACHE_DIR`, if set
+2. `$XDG_CACHE_HOME/aviant`, if `XDG_CACHE_HOME` is set
+3. `~/Library/Caches/aviant` on macOS, `~/.cache/aviant` elsewhere (`/root/.cache/aviant` in the Docker images)
+4. `$TMPDIR/aviant-cache`, when there is no `HOME` or none of the above is writable
+
+`aviant doctor` prints the path in use and whether it is warm, and the server prints it at startup. A warmed image keeps the server version it was built from, so re-run warmup against each new base image.
 
 ```bash
 # 1. Run warmup on a GPU host (compiles shaders, writes driver caches to disk)
