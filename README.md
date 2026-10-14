@@ -74,7 +74,7 @@ Finch v1 | 20s | < 3 GB | ~2.3 s |
 ```json
 {
   "status": "ok",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "model": "lark-v2",
   "backend": {
     "selected": "wgpu",
@@ -133,6 +133,8 @@ curl -X POST http://localhost:8080/v1/enhance \
   -o enhanced.wav
 ```
 
+The URL must be `http` or `https`, and its host must resolve only to public addresses. Loopback, private, link-local/cloud-metadata and other non-routable addresses are refused with `400`. Redirects are not followed and proxy environment variables are ignored. To process a local file, upload it as multipart instead.
+
 ### `POST /v1/normalize`
 
 Normalize an audio file without enhancement. Applies EBU R128 loudness normalization (-17 LUFS) and resamples to 32 kHz mono. Returns `audio/wav`. This is the same preprocessing that runs internally before enhancement, useful when you need the normalized audio separately.
@@ -158,6 +160,8 @@ curl -X POST http://localhost:8080/v1/normalize \
   -o normalized.wav
 ```
 
+The URL must be `http` or `https`, and its host must resolve only to public addresses. Loopback, private, link-local/cloud-metadata and other non-routable addresses are refused with `400`. Redirects are not followed and proxy environment variables are ignored. To process a local file, upload it as multipart instead.
+
 ### `POST /v1/enhance/async`
 
 Async enhancement via cloud storage. The server downloads from `input_url`, processes the audio, and uploads the result to `output_url`. A preprocessed (normalized, 32 kHz) copy of the input is also uploaded alongside the output as `{input_filename}_preprocessed.wav`.
@@ -179,7 +183,7 @@ curl -X POST http://localhost:8080/v1/enhance/async \
 
 | Status | Meaning | Retry? |
 |---|---|---|
-| `400` | Bad request — an unsupported upload file extension, or audio that cannot be decoded | No, it will fail identically |
+| `400` | Bad request — an unsupported upload file extension, audio that cannot be decoded, or a URL-mode URL that is not public `http(s)` | No, it will fail identically |
 | `401` | Unauthorized — missing, malformed or invalid SDK key | No |
 | `500` | Internal server error — processing failed | Maybe |
 | `503` | The server cannot serve at all — the compute device was lost, or a required ffmpeg capability is missing | After the restart |
@@ -277,6 +281,15 @@ docker run --gpus all -p 8080:8080 --restart unless-stopped \
 Build a new image that bakes in the compiled shader cache. This eliminates the cold start on subsequent container boots, which is useful for scale-to-zero deployments where containers restart frequently.
 
 **Important:** Shaders are specialized per batch size. The warmup must use the same `--batch-size` as production inference.
+
+The compiled cache lives in a fixed per-user directory, chosen in this order:
+
+1. `AVIANT_CACHE_DIR`, if set
+2. `$XDG_CACHE_HOME/aviant`, if `XDG_CACHE_HOME` is set
+3. `~/Library/Caches/aviant` on macOS, `~/.cache/aviant` elsewhere (`/root/.cache/aviant` in the Docker images)
+4. `$TMPDIR/aviant-cache`, when there is no `HOME` or none of the above is writable
+
+`aviant doctor` prints the path in use and whether it is warm, and the server prints it at startup. A warmed image keeps the server version it was built from, so re-run warmup against each new base image.
 
 ```bash
 # 1. Run warmup on a GPU host (compiles shaders, writes driver caches to disk)

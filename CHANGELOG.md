@@ -2,6 +2,42 @@
 
 All notable changes to the Aviant Speech Enhancement Server are documented here.
 
+## [0.6.0] - 2026-10-02
+
+Security release. URL mode now refuses addresses that are not public — read the upgrade notes if you fetch audio from an internal host.
+
+### Changed
+- **URL mode only fetches from public addresses.** `/v1/enhance` and `/v1/normalize` with a JSON `{"url": ...}` body accept `http` and `https` only. The request is refused with `400` if the host resolves to any loopback, private (RFC 1918), link-local or cloud-metadata (`169.254.169.254`), shared (CGNAT), unique-local IPv6 or other non-routable address, including IPv4-mapped and NAT64 forms of those
+- URL mode does not follow redirects. A URL that answers with a `3xx` gets `400`
+- URL mode ignores `HTTP_PROXY` and `HTTPS_PROXY` and connects directly to the address it checked
+- URL downloads time out after 120 s
+- GPU runtime upgraded (burn 0.21, wgpu 29)
+
+### Security
+- Fixed server-side request forgery (SSRF) in URL mode. Before this release, a caller with a valid key could make the server fetch internal services or cloud instance metadata. DNS rebinding is also blocked: the download is pinned to the addresses that passed the check
+- Updated dependencies with published advisories (`quinn-proto`, `rustls-webpki`, `zerovec`, `quick-xml`, `gix-validate`)
+
+### Upgrade notes
+
+1. **URL mode and internal hosts.** If you pass URLs that point at `localhost`, a private network or a redirecting link, upload the file as `multipart/form-data` instead, or use `/v1/enhance/async` with `s3://` / `az://`, which is unaffected
+2. **Pre-warmed images.** A warmed image keeps the version it was built from. Re-run `warmup-image.sh` or `warmup-cuda.sh` against the 0.6.0 base image
+
+## [0.5.2] - 2026-08-18
+
+### Fixed
+- The GPU shader cache no longer depends on the working directory. Starting from a different directory re-paid the full compile (~105 s instead of ~10 s), and starting from a directory the server could not write to made it refuse to start with a misleading "failed its smoke test" GPU error
+
+### Changed
+- The cache now lives in a fixed per-user directory: `~/Library/Caches/aviant` on macOS, `$XDG_CACHE_HOME/aviant` or `~/.cache/aviant` on Linux, `$TMPDIR/aviant-cache` when there is no `HOME`. In the Docker images it moved from `/app/target/autotune` to `/root/.cache/aviant`
+
+### Added
+- `AVIANT_CACHE_DIR` to override the cache location
+- `aviant doctor` reports the cache path and whether it is warm. The server prints the path at startup
+
+### Upgrade notes
+
+1. **Pre-warmed images.** An image warmed by 0.5.1 or earlier has its cache in the old location and is no longer warm. Re-run `warmup-image.sh` against the new base image once
+
 ## [0.5.1] - 2026-08-17
 
 ### Added
