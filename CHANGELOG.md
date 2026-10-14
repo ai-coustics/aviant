@@ -2,6 +2,47 @@
 
 All notable changes to the Aviant Speech Enhancement Server are documented here.
 
+## [0.7.0] - 2026-10-14
+
+Security and maintenance release. **The Docker images now run as a non-root user**, which can break deployments that mount writable volumes. Read the upgrade notes below first.
+
+### Changed
+- **Containers run as uid/gid `10001` (user `aviant`) instead of root.** `/app` (binary and weights) stays root-owned and read-only. The server writes only to `/tmp` and to its GPU cache in `/home/aviant/.cache/aviant`. The UID is numeric, so Kubernetes `runAsNonRoot` can verify it
+- Image packages are upgraded at build time. The `aviant-wgpu` and `aviant-cuda` images previously shipped the outdated system packages of their NVIDIA base images (openssl, libc, GnuTLS, …), including CVE-2023-4911 and CVE-2026-45447. CUDA libraries stay pinned to 12.6
+- Upgraded the compute stack to burn 0.22, cubecl 0.11 and wgpu 30. Enhanced output is bit-identical to 0.6.0 on CPU. On GPU it differs by at most ~0.08 LSB RMS (floating-point summation order), and it is no further from the CPU output than 0.6.0 was
+- Building from source requires Rust 1.95 or newer
+
+### Removed
+- The Candle backend. It had been disabled and did not compile; `cpu`, `wgpu` and `cuda` are unaffected
+
+### Security
+- Dependency updates for advisories in `rustls`, `hyper`, `h2`, `http`, `tar`, `bytes`, `zerocopy`, `rand` and others
+
+### Upgrade notes
+
+1. **Writable mounts.** Any volume the container writes to must be writable by uid `10001`, for example `chown -R 10001:10001 /path/on/host`. Read-only mounts such as the Vulkan ICD mount are unaffected. If a mounted `AVIANT_CACHE_DIR` is not writable, the server still starts, but it puts the GPU cache inside the container instead, so warm starts don't survive a container restart
+2. **Pre-warmed images.** Rebuild them from the 0.7.0 base. The GPU cache format changed with the compute-stack upgrade, and the cache now lives in the `aviant` user's home rather than root's, so an image warmed with 0.6.x is no longer warm
+3. **Custom `--user`.** Running the image as a different uid (`--user`, Kubernetes `runAsUser`) still works. A uid with no home directory in the image gets its GPU cache in `/tmp`, so set `AVIANT_CACHE_DIR` to a writable, persistent path to keep warm starts
+
+## [0.6.0] - 2026-10-02
+
+Security release.
+
+### Security
+- URL mode (`{"url": ...}` on `/v1/enhance` and `/v1/normalize`) only fetches `http`/`https` URLs whose host resolves to public addresses. Loopback, private (RFC 1918), link-local/cloud-metadata and other non-routable addresses are refused with `400`, redirects are not followed, and `HTTP(S)_PROXY` is bypassed for these fetches. To enhance a local file, upload it as multipart instead
+- Dependency updates for published security advisories, including `object_store` 0.14 and `reqwest` 0.13
+
+## [0.5.2] - 2026-08-19
+
+### Added
+- macOS (Apple Silicon) bundle: a prebuilt, ad-hoc-signed development build. Clear the download flag with `xattr -dr com.apple.quarantine aviant-server` before running it
+
+### Changed
+- The GPU kernel cache lives in a fixed per-user directory (`~/.cache/aviant` on Linux, `~/Library/Caches/aviant` on macOS, overridable with `AVIANT_CACHE_DIR`) instead of `./target/autotune` relative to the working directory. Starting from another directory no longer re-pays the full compile, and an unwritable working directory no longer stops the server from starting with a misleading GPU error
+
+### Upgrade notes
+- **Pre-warmed images:** the cache moved out of `/app/target/autotune`, so an image warmed by an older version is no longer warm. Re-run `warmup-image.sh` against the new base image once
+
 ## [0.5.1] - 2026-08-17
 
 ### Added

@@ -74,7 +74,7 @@ Finch v1 | 20s | < 3 GB | ~2.3 s |
 ```json
 {
   "status": "ok",
-  "version": "0.5.1",
+  "version": "0.7.0",
   "model": "lark-v2",
   "backend": {
     "selected": "wgpu",
@@ -132,6 +132,8 @@ curl -X POST http://localhost:8080/v1/enhance \
   -d '{"url": "https://example.com/audio.wav"}' \
   -o enhanced.wav
 ```
+
+The URL must be `http` or `https`, and its host must resolve only to public addresses. Loopback, private (RFC 1918), link-local/cloud-metadata and other non-routable addresses are refused with `400`, and redirects are not followed. To enhance a local file, upload it as multipart instead. The same rules apply to URL mode on `/v1/normalize`.
 
 ### `POST /v1/normalize`
 
@@ -308,6 +310,33 @@ Convenience scripts are provided for both backends:
 # CUDA
 ./scripts/warmup-cuda.sh --base ghcr.io/ai-coustics/aviant-cuda:latest --model lark-v2 --batch-size 1
 ```
+
+**Re-warm after every upgrade.** A warmed image is tied to the version it was built from. In particular, an image warmed with 0.6.x is not warm under 0.7.0: the GPU cache format changed, and the cache moved from root's home to the `aviant` user's.
+
+## Container user and writable mounts
+
+Since 0.7.0 the images run as an unprivileged user, `aviant` (uid/gid **10001**), not as root. The binary and weights under `/app` are read-only. At runtime the server writes only to:
+
+| Path | Purpose |
+|---|---|
+| `/tmp` | Per-request working files |
+| `/home/aviant/.cache/aviant` | GPU kernel cache (override with `AVIANT_CACHE_DIR`) |
+
+- **Read-only mounts** such as `-v /usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro` are unaffected.
+- **A writable mount** must be writable by uid 10001. For example, to keep the GPU cache across container restarts:
+
+  ```bash
+  sudo mkdir -p /var/cache/aviant && sudo chown 10001:10001 /var/cache/aviant
+  docker run --gpus all -p 8080:8080 --restart unless-stopped \
+    -v /usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro \
+    -v /var/cache/aviant:/var/cache/aviant -e AVIANT_CACHE_DIR=/var/cache/aviant \
+    -e SDK_KEY="YOUR-KEY" \
+    ghcr.io/ai-coustics/aviant-wgpu:latest --batch-size 1 --model lark-v2
+  ```
+
+  If the directory isn't writable, the server still starts, but it keeps the cache inside the container, so it is lost on restart.
+- **Kubernetes:** `runAsNonRoot: true` works as-is, because the image declares a numeric user. Set `fsGroup: 10001` (or `runAsUser`/`runAsGroup: 10001`) on pods that mount writable volumes.
+- **A different uid** (`--user`, `runAsUser`) also works. A uid with no home directory in the image puts the GPU cache in `/tmp`, so set `AVIANT_CACHE_DIR` to a writable path to keep warm starts.
 
 ## Input and output
 
